@@ -1,0 +1,1492 @@
+---
+title: "Introduktion til registerdata – særlig fokus på Event History Analysis (EHA) data"
+encoding: "UTF-8"
+execute:
+  echo: false
+format:
+  revealjs:
+    self-contained: true
+    embed-resources: true
+    self-contained-math: true
+    smaller: true
+    scrollable: true
+    theme: dark 
+    html-math-method:
+      method: mathjax
+      url: "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/latest.js?config=TeX-MML-AM_CHTML"
+    footer: "Jeppe F. Qvist | 14. februar 2025"
+---
+
+```{r}
+options(scipen=999)
+
+library(tidyverse)
+library(magrittr)
+library(gt)
+library(survival)
+library(ggsurvfit)
+library(LexisPlotR)
+```
+
+## Dagens program
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+I dag lægger i forlængelse af introduktionen i sidste uge, fokus er at få styr på grundbegreberne før vi bevæger os videre. I dag bliver derfor mere "teknisk", i modsætning til forelæsningerne herfra.
+
+-   Hvorfor (og hvornår) arbejder vi med `registerdata`.
+-   Hvorfor (og hvornår) arbejder vi med `forløbsanalyse`.
+-   Repitation af grundbegreber.
+    -   (Simpel) Kaplan-Meier: `kode` og `output`.
+    -   Dagens øvelse.
+
+## Forventet udbytte
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="60%"}
+### *Viden*
+
+
+-   Indsigt i de danske **registerdata**.
+-   Indblik i fordelene ved **longitudinale** data.
+-   Indblik i `R`-pakker relevant for **forløbsanalyse**.
+
+
+### *Færdigheder*
+
+
+-   **Indlæse** data.
+-   **Datamanagement** i `R`.
+-   Simple **analyser** i `R`.
+    -   *Kaplan-Meier* overlevelsesanalyse i `R`.
+
+:::
+
+::: {.column width="40%"}
+### *Kompetancer*
+
+
+-   **Analyse** og **tolkning** af en "simpel" *Kaplan-Meier* overlevelsesanalyse.
+
+:::
+:::
+
+# Hvordan får vi mest ud af dette kursus og de planlagte øvelser?
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+# Hvorfor arbejder vi med `registerdata`?
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+## Hønen eller ægget?
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+![](sketchingscience-chicken-or-egg-evolution.jpg)
+
+## De danske `registerdata`.
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+[Link til bestillinglisten](https://www.dst.dk/extranet/forskningvariabellister/Oversigt%20over%20registre.html)
+
+![](Screenshot%202024-02-14%20at%2012.14.13.png)
+
+## Typer af `dataformater` i danske registre. (1)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="50%"}
+
+-   **Statusregistre** opgjort på bestemte datoer (e.g., 1. januar, hvert år).
+    -   `BEF`: Befolkningen.
+-   **Hændelsesregistre** for bestemte begivenheder i bestemte tisperioder.
+    -   `DOD`: Døde i Danmark.
+
+:::
+
+::: {.column width="50%"}
+
+-   **Enheder** i registrene.
+    -   Individer (`CPR`, anonymiseret som `PNR`).
+    -   Familier (`FAMILIE_ID`).
+    -   Virksomheder (`CVR`).
+    -   Uddannelsesinstitutioner (`INSTNR`).
+    -   Osv `...`
+
+:::
+:::
+
+## Typer af `dataformater` i danske registre. (2)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+Hvilke implikationer har dataformaterne for `tidsenheder`?
+
+::: incremental
+-   `Discrete-time` metoder: modellerer `odds`.
+-   `Continues-time` metoder: modellerer `hazard rate`.
+-   Mere herom i de efterfølgende forelæsninger, hvor vi også har fokus på `censurering`.
+:::
+
+# Første berøring med registerdata
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+```{r}
+#| eval: false
+#| echo: true
+
+df <- haven::read_sas("//Volumes//oecon-forloeb24//Råfiler//pnr_sample.sas7bdat")
+
+```
+
+Selvom dette blot er et 1% sample og "kun" indeholder 2.008.567 observationer (individer) og 88 variable, tager det lige under 2 min. at læse ind i `R` med `read_sas()` funktionen fra `haven`-pakken.
+
+Al rå registerdata kommer som `.sas7bdat`-format.
+
+## Betingelserne for at kunne lave en forløbsanalyse er:
+
+
+::: incremental
+-   `Måling af om en begivenheden finder sted`.
+-   `At vi kan observere tiden fra start til begivenhed` (eller censurering).
+-   Dette kan udtrykkes i forskellige data-strukturer. Primært:
+    -   `Single-episode file`: Hver enhed (fx en patient) har præcis én episode i filen. Én række per unikt subjekt. Indeholder typisk aggregerede oplysninger eller en enkeltstående hændelse, som dækker hele observationsperioden.
+    -   `Multi-episode file`: Hver enhed kan have flere episoder i filen. Flere rækker per unikt subjekt, hvor hver række repræsenterer en unik episode. Hver række har en start- og slutdato samt oplysninger om hændelsen.
+    -   **`Subject-Period file`**: Én række per unik kombination af enhed og en defineret periode (fx en måned, et år). Opsummerer information om alle episoder, der er sket i perioden.
+:::
+
+**SPG:** Hvilken struktur har vores **"flyttedata"**?
+
+## Mål(ene) for overlevelsesanalyse
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+1.  Estimation af `overlevelses` og `fordelings`-funktionerne.
+
+$$
+S(t) = P(\{T>t\}) = \int_{t}^{\infty} f(u)du = 1-F(t)
+$$ 
+
+$S(t)$ – **Overlevelsesfunktionen**: Angiver sandsynligheden for, at tidsintervallet $T$ (dvs. tiden fra start til hændelsen) er større end $t$, dvs. at hændelsen endnu *ikke* har indtruffet ved tid $t$.
+
+Vi kan udtrykke denne sandsynlighed som integralet for *probability density function* (**pdf**; tæthedsfunktionen). Med andre ord, sandsynligheden beregnes som arealet under **pdf** $f(u)$ fra $t$ til $\infty$.
+
+Dermed er $F(t)$ den kummulative distributions funktion (**cdf**) af $T$, ssandsynligheden for, at hændelsen *har* indtruffet inden tid $t$, hvorfor $1-F(t)$ er sandsynligheden for, at hændelsen ikke er indtruffet (altså $T>t$).
+
+<br/>
+
+::: aside
+$du$ repræsenterer en "infinitesimal" ændring i $u$.
+:::
+
+## Eksempel med en `exponential` **pdf** (1)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+#| echo: true
+
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.1
+
+S.t.teoretisk <- S.t(t, h)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r}
+#| echo: false
+
+gt(tibble(head(S.t.teoretisk, n = 10))) %>% 
+  tab_options(
+    table.background.color = "#FFFFFF00",
+    column_labels.font.size = px(10),
+    column_labels.font.weight = "bold",
+    table.font.color = "white",
+    table.font.size = px(12L)) %>%  
+  cols_label(`head(S.t.teoretisk, n = 10)` = "t")
+```
+:::
+:::
+
+<br/>
+
+::: aside
+Med en exponentiel fordeling antages **hazard rate** (*instantaneous failure rate*) at være konstant over tid og er derfor typisk baseline i survival analyses. Forholdet mellem **hazard rate** og $S(t)$ kan med en exponential fordeling udtrykkes som: $\text{exp} \left[ -\int_{t}^{\infty} h(u)du \right]$ (se Kleinbaun og Klein, 2020 for detaljer).
+:::
+
+## Eksempel med en `exponential` **pdf** (2)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="1-4|6-7|9"}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.1
+
+S.t.teoretisk <- S.t(t, h)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r}
+#| echo: false
+
+gt(tibble(head(S.t.teoretisk, n = 10))) %>% 
+  tab_options(
+    table.background.color = "#FFFFFF00",
+    column_labels.font.size = px(10),
+    column_labels.font.weight = "bold",
+    table.font.color = "white",
+    table.font.size = px(12L)) %>%  
+  cols_label(`head(S.t.teoretisk, n = 10)` = "t")
+```
+:::
+:::
+
+<br/>
+
+::: aside
+Med en exponentiel fordeling antages **hazard rate** (*instantaneous failure rate*) at være konstant over tid og er derfor typisk baseline i survival analyses. Forholdet mellem **hazard rate** og $S(t)$ kan med en exponential fordeling udtrykkes som: $\text{exp} \left[ -\int_{t}^{\infty} h(u)du \right]$ (se Kleinbaun og Klein, 2020 for detaljer).
+:::
+
+## Eksempel med en `exponential` **pdf** (3)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+#| echo: true
+
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.1
+
+S.t.teoretisk <- S.t(t, h)
+```
+:::
+
+::: {.column width="60%"}
+### Output (afrundet)
+
+```{r}
+#| echo: false
+
+gt(tibble(round(head(S.t.teoretisk, n = 10), 2))) %>% 
+  tab_options(
+    table.background.color = "#FFFFFF00",
+    column_labels.font.size = px(10),
+    column_labels.font.weight = "bold",
+    table.font.color = "white",
+    table.font.size = px(12L)) %>%  
+  cols_label(`round(head(S.t.teoretisk, n = 10), 2)` = "t")
+```
+:::
+:::
+
+<br/>
+
+::: aside
+Med en exponentiel fordeling antages **hazard rate** (*instantaneous failure rate*) at være konstant over tid og er derfor typisk baseline i survival analyses. Forholdet mellem **hazard rate** og $S(t)$ kan med en exponential fordeling udtrykkes som: $\text{exp} \left[ -\int_{t}^{\infty} h(u)du \right]$ (se Kleinbaun og Klein, 2020 for detaljer).
+:::
+
+## Eksempel med en `exponential` **pdf** (4)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="7,9"}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.1
+
+S.t.teoretisk <- S.t(t, h)
+```
+
+$h$ er vores *rate parameter* for den exponentielle distribution. $h(t)$ repræsenterer `failures per unit of time`. Her er den sat til $h = 0.1$. **I praksis estimerer vi denne parameter.**
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=1.5, fig.width=3, fig.align="center"}
+
+ggplot(data = tibble(t, S.t.teoretisk),
+       aes(x = t,
+           y = `S.t.teoretisk`)) +
+  geom_line(color = "blue") +
+  labs(x = "Tid (t)", 
+       y = expression("Overlevelsesfunktionen" ~ italic('S(t)'))) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## Eksempel med en `exponential` **pdf** (5)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="7,9"}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.1
+
+S.t.teoretisk <- S.t(t, h)
+```
+
+::: {style="font-size: 50%;"}
+
+Udtryk anderledes, `probability density funktionen` (**pdf**), $f(t)$, bestemmer "styrken" af en begivenheds sandsynlighed ved:
+
+$$ 
+h(t) = \frac{ f(t) } { \hat{S}(t) } 
+$$
+
+Med andre ord, $h$ $\equiv$ **hazard rate**.
+:::
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=1.5, fig.width=3, fig.align="center"}
+
+ggplot(data = tibble(t, S.t.teoretisk),
+       aes(x = t,
+           y = `S.t.teoretisk`)) +
+  geom_line(color = "blue") +
+  labs(x = "Tid (t)", 
+       y = expression("Overlevelsesfunktionen" ~ italic('S(t)'))) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## Eksempel med en `exponential` **pdf** (6)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="7,9"}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.1
+
+S.t.teoretisk <- S.t(t, h)
+```
+
+::: {style="font-size: 50%;"}
+
+Eftersom relationen mellem $S(t)$ og **hazard rate**, $h(t)$, er givet ved $S(t) = \text{exp} \left[ -\int_{t}^{\infty} h(u)du \right]$,
+
+følger det at:
+
+-   Jo højere $h$:
+    -   des "stejlere" bliver overlevelsesfunktionen,
+    -   des hurtigere bliver $S(t) = 0$,
+    -   des hurtigere bliver $F(t) = 1$.
+:::
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=1.5, fig.width=3, fig.align="center"}
+
+ggplot(data = tibble(t, S.t.teoretisk),
+       aes(x = t,
+           y = `S.t.teoretisk`)) +
+  geom_line(color = "blue") +
+  labs(x = "Tid (t)", 
+       y = expression("Overlevelsesfunktionen" ~ italic('S(t)'))) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## Eksempel med en `exponential` **pdf** (7)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.6
+
+S.t.teoretisk <- S.t(t, h)
+
+```
+
+``` {.r code-line-numbers="7"}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.6
+
+S.t.teoretisk <- S.t(t, h)
+```
+
+Hvad sker der så når vi ændrer værdien af **hazard rate** ($h(t)$)?
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=1.5, fig.width=3, fig.align="center"}
+
+ggplot(data = tibble(t, S.t.teoretisk),
+       aes(x = t,
+           y = `S.t.teoretisk`)) +
+  geom_line(color = "blue") +
+  labs(x = "Tid (t)", 
+       y = expression("Overlevelsesfunktionen" ~ italic('S(t)'))) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## Eksempel med en `exponential` **pdf** (8)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.01
+
+S.t.teoretisk <- S.t(t, h)
+
+```
+
+``` {.r code-line-numbers="7"}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+h <- 0.01
+
+S.t.teoretisk <- S.t(t, h)
+```
+
+Hvad sker der så når vi ændrer værdien af **hazard rate** ($h(t)$)?
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=1.5, fig.width=3, fig.align="center"}
+
+ggplot(data = tibble(t, S.t.teoretisk),
+       aes(x = t,
+           y = `S.t.teoretisk`)) +
+  geom_line(color = "blue") +
+  labs(x = "Tid (t)", 
+       y = expression("Overlevelsesfunktionen" ~ italic('S(t)'))) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## Eksempel med en `exponential` **pdf** (9)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+
+list <- list()
+for (i in seq(0.05, 0.95, by = .1)) {
+  out <- S.t(t, i) 
+  h <- as.character(i)
+  out %<>% tibble(t, out, h)
+  list[[h]] <- out
+}
+hs <- do.call("rbind.data.frame", 
+              list)
+
+```
+
+``` {.r code-line-numbers="8-16"}
+S.t <- 
+  function(t, h) {
+  return(1 - pexp(t, rate = h))
+  }
+
+t <- seq(0, 50, by = 1)
+
+list <- list()
+for (i in seq(0.05, 0.95, by = .1)) {
+  out <- S.t(t, i) 
+  h <- as.character(i)
+  out %<>% tibble(t, out, h)
+  list[[h]] <- out
+}
+hs <- do.call("rbind.data.frame", 
+              list)
+```
+
+Hvad sker der så når vi ændrer værdien af **hazard rate** ($h(t)$)?
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=1, fig.width=4.5, fig.align="center"}
+
+ggplot(data = hs,
+       aes(x = t,
+           y = out,
+           color = h)) +
+  geom_line() +
+  labs(x = "Tid (t)", 
+       y = expression("Overlevelsesfunktionen" ~ italic('S(t)')),
+       color = expression(italic('h(t)'))) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## `Hazard funktionen` (1)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+Hazardfunktionen, også kaldet den betingede fejlrate, beskriver den øjeblikkelige risiko for, at hændelsen indtræffer i tidsintervallet $\left[ t, t+\Delta t \right]$, givet at hændelsen endnu ikke har fundet sted ved tid $t$. Dette understreger, at vi har med en rate at gøre---som kan antage værdier fra 0 til $\infty$---og ikke med en direkte sandsynlighed. Formelt defineres den som:
+
+$$ h(t) = \lim_{{\Delta t \to 0}} \frac{{P(t < T \leq t + \Delta t \,|\, T > t)}}{{\Delta t}} $$
+
+${P(t < T \leq t + \Delta t \,|\, T > t)}$ angiver sandsynligheden for, at hændelsen indtræffer i et kort tidsinterval efter $t$, forudsat at enheden har overlevet indtil $t$. Udtrykket $\lim_{{\Delta t \to 0}}$ betyder, at vi betragter den **øjeblikkelige hændelsesrate**.
+
+::: {style="font-size: 50%;"}
+
+<br>
+
+Sammenhængen mellem hazardfunktionen $h(t)$ og overlevelsesfunktionen $S(t)$ kan udtrykkes som den negative integral af hazard functionen:
+
+$$
+S(t) = \text{exp} \left[ -\int_{0}^{t} h(u)du \right]
+$$
+
+hvilket også implicerer, at:
+
+$$
+h(t) = -\left[ \frac{dS(t)/dt}{S(t)} \right]
+$$
+
+:::
+
+## `Hazard funktionen` (2)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+Indtil nu har vi derfor antaget den **øjeblikkelige hændelsesrate**, $\lim_{{\Delta t \to 0}}$, er konstant over tid.
+
+<br/>
+
+```{r, fig.align="center"}
+x <- 1:10
+y <- 2*x + 3  
+data <- data.frame(x = x, y = y)
+
+# Create the plot
+ggplot(data, aes(x = x, y = y)) +
+  geom_hline(yintercept = 15, color = "red") +
+  labs(x = expression("Tid" ~ italic(t)), 
+       y = " ", 
+       title = expression("Exponentieret model med konstant hazard," ~ italic(lambda))
+  ) +
+  scale_x_continuous(breaks = c(1:10), labels = c("", "", "", "", "", "", "", "", "", "")) +
+  scale_y_continuous(breaks = c(14, 15, 16), labels = c("", expression(italic(lambda)), "")) +
+  
+  theme_classic()
+```
+
+## `Hazard funktionen`: "shapes" (1)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+t <- seq(0, 10, by = 0.1)
+
+h.exp <- dexp(t, rate = 1)
+h.weibull <- dweibull(t, shape = 2, scale = 1)
+h.lognormal <- dlnorm(t, meanlog = 0, sdlog = 1)
+```
+
+``` {.r code-line-numbers="|1|2|3"}
+h.exp <- survival::dexp(time, rate = 1)
+h.weibull <- survival::dweibull(time, shape = 2, scale = 1)
+h.lognormal <- survival::dlnorm(time, meanlog = 0, sdlog = 1)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=1, fig.width=5.5, fig.align="center"}
+
+ggplot(data = 
+         data.frame(t = rep(t, 3),
+                 h = c(h.exp, h.weibull, h.lognormal),
+                 func = rep(c("Exponential", "Weibull", "Lognormal"), 
+                            each = length(t)))
+       ,
+       aes(x = t,
+           y = h,
+           color = func)) +
+  geom_line() +
+  labs(x = "Tid (t)", 
+       y = expression("Hazard Rate" ~ italic('h(t)')),
+       color = expression(italic('Type/shape'))) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## `Hazard funktionen`: "shapes" (2)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="1"}
+h.exp <- dexp(t, rate = 1)
+h.weibull <- dweibull(t, shape = 2, scale = 1)
+h.lognormal <- dlnorm(t, meanlog = 0, sdlog = 1)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=5.5, fig.align="center"}
+
+n <- 1000  
+rate <- 0.1  
+
+data <- rexp(n, rate = rate)
+df <- data.frame(Data = data)
+exp_density <- dexp(seq(0, max(df$Data), length.out = 1000), rate = rate)
+
+ggplot(df, aes(x = Data)) +
+  coord_cartesian(ylim = c(0, .1), xlim = c(0,60)) +
+  geom_histogram(binwidth = 0.5, 
+                 fill = "skyblue", 
+                 color = "black", 
+                 aes(y = ..density..)) +
+  geom_line(data = data.frame(X = seq(0, max(df$Data), length.out = 1000), 
+                              Density = exp_density), 
+            aes(x = X, y = Density), color = "red", size = 1) +
+  labs(x = "Tid (t)", 
+       y = expression("'Failures per unit of time'")) +
+  theme_minimal()
+
+```
+:::
+:::
+
+## `Hazard funktionen`: "shapes" (3)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="2"}
+h.exp <- dexp(t, rate = 1)
+h.weibull <- dweibull(t, shape = 2, scale = 4)
+h.lognormal <- dlnorm(t, meanlog = 0, sdlog = 1)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=5.5, fig.align="center"}
+n <- 1000  
+shape <- 2 
+scale <- 4  
+
+data <- rweibull(n, shape = shape, scale = scale)
+df <- data.frame(Data = data)
+weibull_density <- dweibull(seq(0, max(df$Data), length.out = 1000), shape = shape, scale = scale)
+
+ggplot(df, aes(x = Data)) +
+  coord_cartesian(ylim = c(0, .25), xlim = c(0,10)) +
+  geom_histogram(binwidth = 0.5, 
+                 fill = "skyblue", 
+                 color = "black", 
+                 aes(y = ..density..)) +
+  geom_line(data = data.frame(X = seq(0, max(df$Data), 
+                                      length.out = 1000), 
+                              Density = weibull_density), 
+            aes(x = X, y = Density), 
+            color = "red", size = 1) +
+  labs(x = "Tid (t)", 
+       y = expression("'Failures per unit of time'")) +
+  theme_minimal()
+```
+:::
+:::
+
+## `Hazard funktionen`: "shapes" (4)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="2"}
+h.exp <- dexp(t, rate = 1)
+h.weibull <- dweibull(t, shape = .5, scale = 1)
+h.lognormal <- dlnorm(t, meanlog = 0, sdlog = 1)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=5.5, fig.align="center"}
+n <- 1000  
+shape <- 0.5 
+scale <- 1 
+
+data <- rweibull(n, shape = shape, scale = scale)
+df <- data.frame(Data = data)
+weibull_density <- dweibull(seq(0, max(df$Data), length.out = 1000), shape = shape, scale = scale)
+
+ggplot(df, aes(x = Data)) +
+  coord_cartesian(ylim = c(0, 1), xlim = c(0,10)) +
+  geom_histogram(binwidth = 0.5, 
+                 fill = "skyblue", 
+                 color = "black", 
+                 aes(y = ..density..)) +
+  geom_line(data = data.frame(X = seq(0, max(df$Data), length.out = 1000), 
+                              Density = weibull_density), 
+            aes(x = X, y = Density), color = "red", size = 1) +
+  labs(x = "Tid (t)", 
+       y = expression("'Failures per unit of time'")) +
+  theme_minimal()
+```
+:::
+:::
+
+## `Hazard funktionen`: "shapes" (5)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` {.r code-line-numbers="3"}
+h.exp <- dexp(t, rate = 1)
+h.weibull <- dweibull(t, shape = 2, scale = 1)
+h.lognormal <- dlnorm(t, meanlog = 0, sdlog = 1)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=5.5, fig.align="center"}
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+
+data <- rlnorm(n, meanlog = meanlog, sdlog = sdlog)
+df <- data.frame(t = data)
+hazard_rate <- dlnorm(df$t, meanlog = meanlog, sdlog = sdlog) / df$t
+hazard_density <- density(hazard_rate)
+
+ggplot(df, aes(x = t)) +
+  geom_histogram(binwidth = 0.5, 
+                 fill = "skyblue", 
+                 color = "black", 
+                 aes(y = ..density..)) +
+  coord_cartesian(ylim = c(0, 1), xlim = c(0,10)) +
+  geom_line(data = data.frame(X = hazard_density$x, 
+                              Density = hazard_density$y), 
+            aes(x = X, y = Density), color = "red", size = 1) +
+  labs(x = "Tid (t)", 
+       y = expression("'Failures per unit of time'")) +
+  theme_minimal()
+```
+:::
+:::
+
+## Og hvad så `...` ? (1)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+Et af målene i overlevelsesanalysen er at sammenligne $S(t)$ og $h(t)$ mellem populationer/grupper, fordi det fortæller noget om hvordan mekanismer påvirker dem forskelligt, *såfremt de er forskellige*.
+
+## Og hvad så `...` ? (1)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+- **Gruppe 1**: Observerede hændelser
+
+<br> 
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+n <- 1000  
+shape <- 2 
+scale <- 4  
+
+data <- rweibull(n, shape = shape, scale = scale)
+df <- data.frame(Data = data)
+weibull_density <- dweibull(seq(0, max(df$Data), length.out = 1000), shape = shape, scale = scale)
+```
+
+``` r
+n <- 1000  
+shape <- 2 
+scale <- 4  
+
+data <- rweibull(n, shape = shape, scale = scale)
+df <- data.frame(Data = data)
+weibull_density <- dweibull(seq(0, max(df$Data), length.out = 1000), shape = shape, scale = scale)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=4, fig.align="center"}
+ggplot(df, aes(x = Data)) +
+  coord_cartesian(ylim = c(0, .25), xlim = c(0,10)) +
+  geom_histogram(binwidth = 0.5, 
+                 fill = "skyblue", 
+                 color = "black", 
+                 aes(y = ..density..)) +
+  geom_line(data = data.frame(X = seq(0, max(df$Data), 
+                                      length.out = 1000), 
+                              Density = weibull_density), 
+            aes(x = X, y = Density), 
+            color = "red", size = 1) +
+  labs(x = "Tid (t)", 
+       y = expression("'Failures per unit of time'")) +
+  theme_minimal()
+```
+:::
+:::
+
+## Og hvad så `...` ? (2)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+- **Gruppe 1**: Estimeret $S(t)$ (bemærk hvordan fordelingen af hændelser "kommer til udtryk" i kurven)
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+n <- 1000  
+shape <- 2 
+scale <- 4  
+
+data <- rweibull(n, shape = shape, scale = scale)
+df <- data.frame(Data = data)
+weibull_density <- dweibull(seq(0, max(df$Data), length.out = 1000), shape = shape, scale = scale)
+
+surv_fit <- survfit2(Surv(data) ~ 1)
+```
+
+``` {.r code-line-numbers="9"}
+n <- 1000  
+shape <- 2 
+scale <- 4  
+
+data <- rweibull(n, shape = shape, scale = scale)
+df <- data.frame(Data = data)
+weibull_density <- dweibull(seq(0, max(df$Data), length.out = 1000), shape = shape, scale = scale)
+
+surv_fit <- survfit2(Surv(data) ~ 1)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=4, fig.align="center"}
+survfit2(Surv(data) ~ 1) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Tid (t)",
+    y = 'Estimeret "Survival Probability", S(t)'
+  ) + 
+  add_confidence_interval() +
+  xlim(0, 7) +
+  theme_minimal()
+```
+:::
+:::
+
+## Og hvad så `...` ? (3)
+      
+- **Gruppe 2**: Observerede hændelser       
+
+<br> 
+
+::: columns     
+::: {.column width="40%"}   
+### Kode     
+
+```{r}
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+
+data <- rlnorm(n, meanlog = meanlog, sdlog = sdlog)
+df <- data.frame(t = data)
+hazard_rate <- dlnorm(df$t, meanlog = meanlog, sdlog = sdlog) / df$t
+hazard_density <- density(hazard_rate)
+
+surv_fit <- survfit2(Surv(data) ~ 1)
+```
+
+``` r
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+
+data <- rlnorm(n, meanlog = meanlog, sdlog = sdlog)
+df <- data.frame(t = data)
+hazard_rate <- dlnorm(df$t, meanlog = meanlog, sdlog = sdlog) / df$t
+hazard_density <- density(hazard_rate)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=4, fig.align="center"}
+ggplot(df, aes(x = t)) +
+  geom_histogram(binwidth = 0.5, 
+                 fill = "skyblue", 
+                 color = "black", 
+                 aes(y = ..density..)) +
+  coord_cartesian(ylim = c(0, 1), xlim = c(0,10)) +
+  geom_line(data = data.frame(X = hazard_density$x, 
+                              Density = hazard_density$y), 
+            aes(x = X, y = Density), color = "red", size = 1) +
+  labs(x = "Tid (t)", 
+       y = expression("'Failures per unit of time'")) +
+  theme_minimal()
+```
+:::
+:::
+
+
+## Og hvad så `...` ? (4)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+- **Gruppe 2**: Estimeret $S(t)$ (bemærk hvordan fordelingen af hændelser "kommer til udtryk" i kurven)
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+
+data <- rlnorm(n, meanlog = meanlog, sdlog = sdlog)
+df <- data.frame(t = data)
+hazard_rate <- dlnorm(df$t, meanlog = meanlog, sdlog = sdlog) / df$t
+hazard_density <- density(hazard_rate)
+
+surv_fit <- survfit2(Surv(data) ~ 1)
+```
+
+``` {.r code-line-numbers="10"}
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+
+data <- rlnorm(n, meanlog = meanlog, sdlog = sdlog)
+df <- data.frame(t = data)
+hazard_rate <- dlnorm(df$t, meanlog = meanlog, sdlog = sdlog) / df$t
+hazard_density <- density(hazard_rate)
+
+surv_fit <- survfit2(Surv(data) ~ 1)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=4, fig.align="center"}
+survfit2(Surv(data) ~ 1) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Tid (t)",
+    y = 'Estimeret "Survival Probability", S(t)'
+  ) + 
+  add_confidence_interval() +
+  xlim(0, 7) +
+  theme_minimal()
+```
+:::
+:::
+
+## Og hvad så `...` ? (5)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+shape <- 2 
+scale <- 2  
+
+weibull_data <- tibble(rweibull(n, shape = shape, scale = scale)) %>% rename(n = 1) %>%  mutate(type = "weibull")
+lognorm_data <- tibble(rlnorm(n, meanlog = meanlog, sdlog = sdlog)) %>% rename(n = 1) %>% mutate(type = "lognorm") 
+data <- rbind(weibull_data, lognorm_data)
+
+surv_fit <- survfit2(Surv(n) ~ type, data = data)
+```
+
+``` r
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+shape <- 2 
+scale <- 4  
+
+weibull_data <- tibble(rweibull(n, shape = shape, scale = scale)) %>% rename(n = 1) %>%  mutate(type = "weibull")
+lognorm_data <- tibble(rlnorm(n, meanlog = meanlog, sdlog = sdlog)) %>% rename(n = 1) %>% mutate(type = "lognorm") 
+data <- rbind(weibull_data, lognorm_data)
+
+surv_fit <- survfit2Surv(n) ~ type, data = data)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=4, fig.align="center"}
+survfit2(Surv(n) ~ type, data = data) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Tid (t)",
+    y = 'Estimeret "Survival Probability", S(t)'
+  ) + 
+  add_confidence_interval() +
+  xlim(0, 7)
+```
+:::
+:::
+
+## Og hvad så `...` ? (6)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+Kan vi sige noget interessant om denne visualisering af vores **longitudinelle data**?
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+```{r}
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+shape <- 2 
+scale <- 2  
+
+weibull_data <- tibble(rweibull(n, shape = shape, scale = scale)) %>% rename(n = 1) %>%  mutate(type = "weibull")
+lognorm_data <- tibble(rlnorm(n, meanlog = meanlog, sdlog = sdlog)) %>% rename(n = 1) %>% mutate(type = "lognorm") 
+data <- rbind(weibull_data, lognorm_data)
+
+surv_fit <- survfit(Surv(n) ~ type, data = data)
+```
+
+``` r
+n <- 1000 
+meanlog <- 0  
+sdlog <- 1 
+shape <- 2 
+scale <- 2  
+
+weibull_data <- tibble(rweibull(n, shape = shape, scale = scale)) %>% rename(n = 1) %>%  mutate(type = "weibull")
+lognorm_data <- tibble(rlnorm(n, meanlog = meanlog, sdlog = sdlog)) %>% rename(n = 1) %>% mutate(type = "lognorm") 
+data <- rbind(weibull_data, lognorm_data)
+
+surv_fit <- survfit(Surv(n) ~ type, data = data)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=4, fig.align="center"}
+survfit2(Surv(n) ~ type, data = data) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Tid (t)",
+    y = 'Estimeret "Survival Probability", S(t)'
+  ) + 
+  add_confidence_interval() +
+  xlim(0, 7)
+```
+:::
+:::
+
+## Hvad kan vi ikke svare på med denne estimation af `S(t)` og `h(t)`?
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: incremental
+-   Den estimerede **pdf**, eller $f(t)$, fortæller også ikke noget om hvordan $S(t)$ og $h(t)$ er påvirket af `uafhængige variable`.
+    -   `Fixed` eller `time-varying`.
+:::
+
+## Censurering (1)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+Vi går mere i dybden til næste forelæsning, men grundlæggende handler det om hvor længe vi kan fælge enheder indenfor vores **datavindue**.
+
+::: incremental
+:::
+
+## Censurering (2)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` r
+data("lifelines_sample")
+lexis_diagram <- lexis.grid(year.start = 1895, 
+                            year.end = 1905, 
+                            age.start = 0, 
+                            age.end = 10)
+lexis.lifeline(lg = lexis_diagram, 
+               entry = lifelines_sample$entry, 
+               exit = lifelines_sample$exit, 
+               lineends = TRUE, alpha = 0.3)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=6}
+data("lifelines_sample")
+lexis_diagram <- lexis.grid(year.start = 1895, 
+                            year.end = 1905, 
+                            age.start = 0, 
+                            age.end = 10)
+lexis.lifeline(lg = lexis_diagram, 
+               entry = lifelines_sample$entry, 
+               exit = lifelines_sample$exit, 
+               lineends = TRUE, alpha = 0.3)
+```
+:::
+:::
+
+## Censurering (3): nyt datavindue
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` r
+data("lifelines_sample")
+lexis_diagram <- lexis.grid(year.start = 1900, 
+                            year.end = 1903, 
+                            age.start = 0, 
+                            age.end = 5)
+lexis.lifeline(lg = lexis_diagram, 
+               entry = lifelines_sample$entry, 
+               exit = lifelines_sample$exit, 
+               lineends = TRUE, alpha = 0.3)
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=6}
+data("lifelines_sample")
+lexis_diagram <- lexis.grid(year.start = 1900, 
+                            year.end = 1903, 
+                            age.start = 0, 
+                            age.end = 5)
+lexis.lifeline(lg = lexis_diagram, 
+               entry = lifelines_sample$entry, 
+               exit = lifelines_sample$exit, 
+               lineends = TRUE, alpha = 0.3)
+```
+:::
+:::
+
+## Censurering (4)
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="60%"}
+### Analysen
+
+::: incremental
+-   De røde linjer i Lexis Diagrammet repræsenterer de (livs)`forløb`, der er fokus for overlevelsesanalysen.
+-   `+` er de **observerede begivenheden** indenfor datavinduet.
+-   De forløb der fortsætter efter 1903 er højre-`censureret`, hvilket vil sige at vi ikke ved om/hvornår begivenheden indtræffer.
+-   De linjer der er påbegyndt før 1900 er `trunkerede`. Vi ved ikke om/hvor længe enheder har været i risiko før "år 0" eller oplevelde en relevant hændelse før "år 0".
+:::
+:::
+
+::: {.column width="40%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=4}
+data("lifelines_sample")
+lexis_diagram <- lexis.grid(year.start = 1900, 
+                            year.end = 1903, 
+                            age.start = 0, 
+                            age.end = 5)
+lexis.lifeline(lg = lexis_diagram, 
+               entry = lifelines_sample$entry, 
+               exit = lifelines_sample$exit, 
+               lineends = TRUE, alpha = 0.3)
+```
+:::
+:::
+
+## Censurering (5): analyse
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+::: columns
+::: {.column width="40%"}
+### Kode
+
+``` r
+library(ggsurvfit)
+
+df <- 
+  lifelines_sample %>% 
+  mutate(event = if_else(is.na(exit), 0, 1),
+         exit = if_else(is.na(exit), as.Date("1905-01-01"), exit),
+         tid = interval(ymd(entry), ymd(exit)) %/% days(1),
+         aar_start = year(entry),
+         aar_slut = year(exit),
+         censureret = if_else(aar_slut >= 1903 & aar_start <= 1900, 0, 1)) 
+
+survfit2(Surv(tid, event) ~ 1, 
+         data = df %>% filter(aar_slut >= 1903 & aar_start <= 1900)) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Dage",
+    y = expression(italic(hat("S")(t)))
+  ) + 
+  add_confidence_interval() +
+  scale_ggsurvfit() +
+  add_censor_mark() +
+  add_risktable(risktable_stats = c("n.risk", "cum.event", "n.censor")) + 
+  theme_minimal()
+```
+:::
+
+::: {.column width="60%"}
+### Output
+
+```{r, fig.asp=.9, fig.width=7}
+library(ggsurvfit)
+
+df <- 
+  lifelines_sample %>% 
+  mutate(event = if_else(is.na(exit), 0, 1),
+         exit = if_else(is.na(exit), as.Date("1905-01-01"), exit),
+         tid = interval(ymd(entry), ymd(exit)) %/% days(1),
+         aar_start = year(entry),
+         aar_slut = year(exit),
+         censureret = if_else(aar_slut >= 1903 & aar_start <= 1900, 0, 1)) 
+
+survfit2(Surv(tid, event) ~ 1, 
+         data = df %>% filter(aar_slut >= 1903 & aar_start <= 1900)) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Dage",
+    y = expression(italic(hat("S")(t)))
+  ) + 
+  add_confidence_interval() +
+  scale_ggsurvfit() +
+  add_censor_mark() +
+  add_risktable(risktable_stats = c("n.risk", "cum.event", "n.censor")) + 
+  theme_minimal()
+```
+:::
+:::
+
+# Dagens øvelse
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+<!--  ----------------------------------------------------------------------------------------------->
+
+## Data og opgave
+
+::: incremental
+-   ***I skal bestemme tiden for fraflytning fra hjemmet efter påbegyndelse af videregående uddannelse***.
+-   Beskriv datasættet.
+    -   Hvor mange variable og observationer er der. Hvad viser de?
+    -   Skab et overblik over begivenheder over tid (e.g., barplots som vist i slides).
+-   Udregn $\hat S(t)$ med en Kaplan-Meier estimation, hvor i kun fokuserer på **tid** og **event** (ingen stratificering).
+    -   Udover $\hat S(t)$ skal i også plotte $F(t)$.
+-   Dataen i skal anvende er **flytte**`.csv` (download fra Moodle).
+    -   `df <- read_csv(here::here("flytte.csv"))`
+    -   `nr`: observations ID.
+    -   `dur`: tid til begivenhed eller censurering.
+    -   `status`: begivenhedsindikator (1/0).
+    -   `aargang` og `udd` arbejder vi med under forelæsningen næste gang.
+-   *Reflekter* over hvad censurering--og mangel på fokus herpå--kan betyde for jeres resultater.
+:::
