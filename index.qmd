@@ -1,5 +1,5 @@
 ---
-title: "Introduktion til registerdata – særlig fokus på Event History Analysis (EHA) data"
+title: "Introduktion til registerdata og forløbsanalyse"
 encoding: "UTF-8"
 execute:
   echo: false
